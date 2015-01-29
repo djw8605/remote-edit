@@ -1,6 +1,7 @@
 Host = require './host'
 RemoteFile = require './remote-file'
 LocalFile = require './local-file'
+Dialog = require '../view/dialog'
 
 fs = require 'fs-plus'
 ssh2 = require 'ssh2'
@@ -54,11 +55,14 @@ module.exports =
       }
 
     getConnectionStringUsingPassword: ->
+      console.info "Using password: #{@password}"
       return {
         host: @hostname,
         port: @port,
         username: @username,
-        password: @password
+        tryKeyboard: true,
+        readyTimeout: 99999999 #,
+        #password: @password
       }
 
     getPrivateKey: (path) ->
@@ -88,6 +92,8 @@ module.exports =
         throw new Error("No valid connection method is set for SftpHost!")
 
     close: (callback) ->
+      console.info "Closing connection"
+      console.trace()
       @connection?.end()
       callback?(null)
 
@@ -108,13 +114,37 @@ module.exports =
             callback(null)
         (callback) =>
           @connection = new ssh2()
+          password = connectionOptions.password
+          @emit 'info', {message: "Inside message", className: 'text-error'}
           @connection.on 'error', (err) =>
             @emit 'info', {message: "Error occured when connecting to sftp://#{@username}@#{@hostname}:#{@port}", className: 'text-error'}
             @connection.end()
             callback(err)
+            
+          @connection.on 'keyboard-interactive', (name, instructions, instructionLang, prompts, finishFunc) =>
+            @emit 'info', {message: "Got keyboard-interactive event: #{prompts[0].prompt}", className: 'text-error'}
+            console.info "Got keyboard-interactive event: #{prompts[0].prompt}"
+          
+            if prompts[0].prompt == "Password: "
+              @emit 'info', {message: "Sending Password...", className: 'text-success'}
+              console.info "Sending passphrase #{password}"
+              finishFunc [password]
+            else
+              console.info "Opening two factor dialog"
+              twoFactorDialog = new Dialog({prompt: prompts[0].prompt})
+              twoFactorDialog.attach (err, response) =>
+                console.info "Sending #{response} as response..."
+                finishFunc [response]
+
+              #callback(null)
+            #@connection.end()
+            #callback("error")
+            
+            
           @connection.on 'ready', =>
             @emit 'info', {message: "Successfully connected to sftp://#{@username}@#{@hostname}:#{@port}", className: 'text-success'}
             callback(null)
+          connectionOptions = {}
           @connection.connect(@getConnectionString(connectionOptions))
       ], (err) ->
         callback?(err)
@@ -136,7 +166,8 @@ module.exports =
           console.error err if err?
         else
           @emit('info', {message: "Successfully wrote remote file sftp://#{@username}@#{@hostname}:#{@port}#{file.remoteFile.path}", className: 'text-success'})
-        @close()
+        # Don't close the connection, have it long lived
+        #@close()
         callback?(err)
       )
 
